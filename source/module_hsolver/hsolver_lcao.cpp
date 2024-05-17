@@ -9,6 +9,7 @@
 #include "module_io/write_HS.h"
 #include "module_hsolver/diago_iter_assist.h"
 #include "module_hsolver/kernels/math_kernel_op.h"
+#include "diago_cusolvermp.h"
 
 #ifdef __ELPA
 #include "diago_elpa.h"
@@ -88,6 +89,22 @@ void HSolverLCAO<T, Device>::solveTemplate(hamilt::Hamilt<T>* pHamilt,
             this->pdiagh->method = this->method;
         }
     }
+    else if (this->method == "cusolvermp")
+    {
+        if (this->pdiagh != nullptr)
+        {
+            if (this->pdiagh->method != this->method)
+            {
+                delete[] this->pdiagh;
+                this->pdiagh = nullptr;
+            }
+        }
+        if (this->pdiagh == nullptr)
+        {
+            this->pdiagh = new DiagoCusolverMP<T>();
+            this->pdiagh->method = this->method;
+        }
+    }
 #endif
     else if (this->method == "lapack")
     {
@@ -114,7 +131,6 @@ void HSolverLCAO<T, Device>::solveTemplate(hamilt::Hamilt<T>* pHamilt,
     }
     else if (this->method == "cg_in_lcao")
     {
-
         if (this->pdiagh != nullptr)
         {
             if (this->pdiagh->method != this->method)
@@ -208,7 +224,7 @@ void HSolverLCAO<T, Device>::solveTemplate(hamilt::Hamilt<T>* pHamilt,
 
 
     if (this->method != "genelpa" && this->method != "scalapack_gvx" && this->method != "lapack"
-                        && this->method != "cusolver" && this->method != "cg_in_lcao" && this->method != "pexsi")
+                        && this->method != "cusolver" && this->method != "cusolvermp" && this->method != "cg_in_lcao" && this->method != "pexsi")
     {
         delete this->pdiagh;
         this->pdiagh = nullptr;
@@ -259,6 +275,9 @@ void HSolverLCAO<T, Device>::hamiltSolvePsiK(hamilt::Hamilt<T>* hm, psi::Psi<T>&
 
     if (this->method != "cg_in_lcao")
     {
+        int rank;
+        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+        GlobalV::ofs_running << "diag Rank: " << rank << std::endl;
         this->pdiagh->diag(hm, psi, eigenvalue);
     }
     else 

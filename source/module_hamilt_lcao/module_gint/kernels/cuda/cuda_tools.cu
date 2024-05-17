@@ -1,6 +1,7 @@
 #include <iostream>
 
 #include "module_hamilt_lcao/module_gint/kernels/cuda/cuda_tools.cuh"
+/*
 cudaError_t checkCuda(cudaError_t result)
 {
     if (result != cudaSuccess)
@@ -9,7 +10,7 @@ cudaError_t checkCuda(cudaError_t result)
         assert(result == cudaSuccess);
     }
     return result;
-}
+}*/
 cudaError_t checkCudaLastError()
 {
     cudaError_t result = cudaGetLastError();

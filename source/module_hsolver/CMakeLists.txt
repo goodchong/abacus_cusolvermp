@@ -26,8 +26,11 @@ if(ENABLE_LCAO)
           ./kernels/math_kernel_op.cpp
           ./kernels/dngvd_op.cpp
           ./kernels/cuda/diag_cusolver.cu
+          ./kernels/cuda/diag_cusolvermp.cu
           diago_cusolver.cpp
           diago_cusolver.h
+          diago_cusolvermp.cpp
+          diago_cusolvermp.h
       )
     add_library(
         diag_cusolver

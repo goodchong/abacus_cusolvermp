@@ -4,11 +4,14 @@
 #include <cublas_v2.h>
 #include <cuda.h> // for CUDA_VERSION
 #include <cuda_runtime.h>
+#include "module_hsolver/kernels/cuda/helper_cuda.h"
 
 #include <fstream>
 #include <iostream>
 #include <sstream>
-cudaError_t checkCuda(cudaError_t result);
+// cudaError_t checkCuda(cudaError_t result);
+#define checkCuda(val) check((val), #val, __FILE__, __LINE__)
+
 cudaError_t checkCudaLastError();
 
 void dump_cuda_array_to_file(double* cuda_array,

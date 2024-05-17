@@ -108,7 +108,7 @@ if(!GlobalV::dm_to_rho)
     //    psi::Psi<std::complex<double>> dm_k_2d();
 
     if (GlobalV::KS_SOLVER == "genelpa" || GlobalV::KS_SOLVER == "scalapack_gvx" || GlobalV::KS_SOLVER == "lapack"
-        || GlobalV::KS_SOLVER == "cusolver" || GlobalV::KS_SOLVER == "cg_in_lcao") // Peize Lin test 2019-05-15
+        || GlobalV::KS_SOLVER == "cusolver" || GlobalV::KS_SOLVER == "cusolvermp" || GlobalV::KS_SOLVER == "cg_in_lcao") // Peize Lin test 2019-05-15
     {
         //cal_dm(this->loc->ParaV, this->wg, psi, this->loc->dm_k);
         elecstate::cal_dm_psi(this->DM->get_paraV_pointer(), this->wg, psi, *(this->DM));
@@ -129,7 +129,7 @@ if(!GlobalV::dm_to_rho)
 
     }
     if (GlobalV::KS_SOLVER == "genelpa" || GlobalV::KS_SOLVER == "scalapack_gvx" || GlobalV::KS_SOLVER == "lapack"
-        || GlobalV::KS_SOLVER == "cusolver" || GlobalV::KS_SOLVER == "cg_in_lcao"  ||  GlobalV::KS_SOLVER == "pexsi")
+        || GlobalV::KS_SOLVER == "cusolver" || GlobalV::KS_SOLVER == "cusolvermp" || GlobalV::KS_SOLVER == "cg_in_lcao"  ||  GlobalV::KS_SOLVER == "pexsi")
     {
         for (int ik = 0; ik < psi.get_nk(); ik++)
         {

@@ -4210,6 +4210,12 @@ void Input::Check(void)
             ModuleBase::WARNING_QUIT("Input", "Cusolver can not be used for series version.");
 #endif
         }
+        else if (ks_solver == "cusolvermp")
+        {
+#ifndef __MPI
+            ModuleBase::WARNING_QUIT("Input", "CusolverMP can not be used for series version.");
+#endif
+        }
         else if (ks_solver == "pexsi")
         {
 #ifdef __PEXSI
