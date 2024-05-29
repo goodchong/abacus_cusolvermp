@@ -16,7 +16,7 @@ void DiagoCusolverMP<T>::diag(hamilt::Hamilt<T>* phm_in, psi::Psi<T>& psi, Real*
 
     MPI_Comm COMM_DIAG=MPI_COMM_WORLD; // use all processes
     {
-        Diag_CusolverMP_gvd<T> es(COMM_DIAG, (const int)GlobalV::NBANDS, (const int)h_mat.row, (const int)h_mat.col, (const int*)h_mat.desc);
+        Diag_CusolverMP_gvd<T> es(COMM_DIAG, (const int)h_mat.row, (const int)h_mat.col, (const int*)h_mat.desc);
 
         ModuleBase::timer::tick("DiagoCusolverMP", "Diag_CusolverMP_gvd");
         es.generalized_eigenvector(h_mat.p, s_mat.p, eigen.data(), psi.get_pointer());

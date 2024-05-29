@@ -1,28 +1,21 @@
-#include <assert.h>
-#include "helper_cuda.h"
 #include "diag_cusolvermp.cuh"
+#include "helper_cuda.h"
 #include "module_base/global_variable.h"
+
+#include <assert.h>
 
 extern "C"
 {
 #include "module_hsolver/genelpa/Cblacs.h"
 }
-#include "iostream"
-void check_cusolver(cusolverStatus_t result, char const *const func, const char *const file,
-           int const line) {
-  if (result != CUSOLVER_STATUS_SUCCESS) {
-    fprintf(stderr, "CUDA error at %s:%d code=%d \"%s\" \n", file, line,
-            static_cast<unsigned int>(result), func);
-    exit(EXIT_FAILURE);
-  }
-}
-// the error check is use for cusolverMP and cuSolver
-#define checkCusolverErrors(val) check_cusolver((val), #val, __FILE__, __LINE__)
+#include <iostream>
+#include "helper_cusolver.h"
+#include "module_base/global_function.h"
 
 static calError_t allgather(void* src_buf, void* recv_buf, size_t size, void* data, void** request)
 {
     MPI_Request req;
-    int         err = MPI_Iallgather(src_buf, size, MPI_BYTE, recv_buf, size, MPI_BYTE, (MPI_Comm)(data), &req);
+    int err = MPI_Iallgather(src_buf, size, MPI_BYTE, recv_buf, size, MPI_BYTE, (MPI_Comm)(data), &req);
     if (err != MPI_SUCCESS)
     {
         return CAL_ERROR;
@@ -34,8 +27,8 @@ static calError_t allgather(void* src_buf, void* recv_buf, size_t size, void* da
 static calError_t request_test(void* request)
 {
     MPI_Request req = (MPI_Request)(request);
-    int         completed;
-    int         err = MPI_Test(&req, &completed, MPI_STATUS_IGNORE);
+    int completed;
+    int err = MPI_Test(&req, &completed, MPI_STATUS_IGNORE);
     if (err != MPI_SUCCESS)
     {
         return CAL_ERROR;
@@ -49,229 +42,205 @@ static calError_t request_free(void* request)
 }
 
 template <typename inputT>
-Diag_CusolverMP_gvd<inputT>::Diag_CusolverMP_gvd(const MPI_Comm comm,
-                                                    const int nev,
-                                                    const int narows,
-                                                    const int nacols,
-                                                    const int *desc)
+Diag_CusolverMP_gvd<inputT>::Diag_CusolverMP_gvd(const MPI_Comm mpi_comm,
+                                                 const int narows,
+                                                 const int nacols,
+                                                 const int* desc)
 {
     // 构造函数的实现
-    this->comm = comm;
-    this->nev = nev;
-    this->narows = narows;
-    this->nacols = nacols;
-
     this->cblacs_ctxt = desc[1];
     this->nFull = desc[2];
-    this->nblk = desc[4];
+
+    // 20240529 zhanghaochong
+    // set mb and nb is not nessary, but I keep it here for the code consistency.
+    // Because in ABACUS, mb always equals to nb
+    const int mb = desc[4];
+    const int nb = desc[5];
+
+    // 20240529 zhanghaochong
+    // so far, cusolverMpSygvd only support rsrc == 0 and csrc == 0
+    const int rsrc = desc[6];
+    const int csrc = desc[7];
+
     this->lda = desc[8];
 
-    MPI_Comm_size(comm, &this->mpi_size);
-    MPI_Comm_rank(comm, &(this->my_global_mpi_id));
-    int localRank;
+    MPI_Comm_size(mpi_comm, &this->globalMpiSize);
+    MPI_Comm_rank(mpi_comm, &(this->globalMpiRank));
+    int localMpiRank;
     {
         MPI_Comm localComm;
 
         MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, &localComm);
-        MPI_Comm_rank(localComm, &localRank);
+        MPI_Comm_rank(localComm, &localMpiRank);
         MPI_Comm_free(&localComm);
-        int deviceCount;
-        checkCudaErrors(cudaGetDeviceCount(&deviceCount));
-        // warning: this is not a good way to assign devices, user should assign One process per GPU
-        checkCudaErrors(cudaSetDevice(localRank % deviceCount));
     }
+    // warning: this is not a good way to assign devices, user should assign One process per GPU
+    // TODO temp solution
+    checkCudaErrors(cudaSetDevice(localMpiRank));
 
     Cblacs_gridinfo(this->cblacs_ctxt, &this->nprows, &this->npcols, &this->myprow, &this->mypcol);
 
-    this->cal_comm = NULL;
+    this->cusolverCalComm = NULL;
     cal_comm_create_params_t params;
     params.allgather = allgather;
     params.req_test = request_test;
     params.req_free = request_free;
-    params.data = (void *)(MPI_COMM_WORLD);
-    params.rank = this->my_global_mpi_id;
-    params.nranks = this->mpi_size;
-    params.local_device = localRank;
+    params.data = (void*)(MPI_COMM_WORLD);
+    params.rank = this->globalMpiRank;
+    params.nranks = this->globalMpiSize;
+    params.local_device = localMpiRank;
 
-    int calStat = calStat = cal_comm_create(params, &this->cal_comm);
-    assert(calStat == CAL_OK);
+    CAL_CHECK(cal_comm_create(params, &this->cusolverCalComm));
 
     checkCudaErrors(cudaStreamCreate(&this->localStream));
-    checkCusolverErrors(cusolverMpCreate(&cusolverMpHandle, localRank, this->localStream));
+    CUSOLVER_CHECK(cusolverMpCreate(&cusolverMpHandle, localMpiRank, this->localStream));
 
-    
-    // TODO 这个怎么处理还没想好。我们有了blacs的grid，现在又有GPU的device grid， 这两个grid是不是可以合并？我们应该怎么抽象这个模型？
-    const int numRowDevices = this->nprows;
-    const int numColDevices = this->npcols;
-
-    // TODO 这个参数设法应该不对
+    // 20240529 zhanghaochong
+    // so far, cusolvermp only support = 1
     this->matrix_i = 1;
     this->matrix_j = 1;
-
-    if (std::is_same<inputT, std::complex<double>>::value) 
+    this->m_local = narows;
+    this->n_local = nacols;
+    if (std::is_same<inputT, std::complex<double>>::value)
     {
         this->datatype = CUDA_C_64F;
-    } else if (std::is_same<inputT, double>::value)
+    }
+    else if (std::is_same<inputT, double>::value)
     {
         this->datatype = CUDA_R_64F;
-    } else 
+    }
+    else
     {
-        GlobalV::ofs_running << "error cusolvermp input type" << std::endl;
+        ModuleBase::WARNING_QUIT("cusolvermp", "unsupported cusolvermp datatype");
     }
 
-    checkCusolverErrors(cusolverMpCreateDeviceGrid(cusolverMpHandle, &this->grid, cal_comm, numRowDevices, numColDevices, CUSOLVERMP_GRID_MAPPING_COL_MAJOR));
+    // 20240529 zhanghaochong
+    // the cpu mpi process blacs grid and multi gpu process blacs grid is the SAME
+    // Setting them the same is not a natural result, but a result that I forced and artificially specified.
+    // This is because the current implementation of the cusolvermp library is ONE process ONE GPU.
+    // So, when we use cusolvermp, we must ensure that the number of processes is equal to the number of GPUs.
+    // In a sense, the MPI usage strategy of ABACUS must be subject to the cusolvermp.
+    CUSOLVER_CHECK(cusolverMpCreateDeviceGrid(cusolverMpHandle,
+                                                   &this->grid,
+                                                   this->cusolverCalComm,
+                                                   this->nprows,
+                                                   this->npcols,
+                                                   CUSOLVERMP_GRID_MAPPING_COL_MAJOR));
 
-    checkCudaErrors(cudaMalloc((void **)&this->d_A, this->narows * this->nacols * sizeof(inputT)));
-    checkCudaErrors(cudaMalloc((void **)&this->d_B, this->narows * this->nacols * sizeof(inputT)));
-    checkCudaErrors(cudaMalloc((void **)&this->d_D, this->nFull * sizeof(outputT)));
-    checkCudaErrors(cudaMalloc((void **)&this->d_Z, this->narows * this->nacols * sizeof(inputT)));
-
-    cusolverMpCreateMatrixDesc(&descA, this->grid, this->datatype, nFull, nFull, nblk, nblk, 0, 0, this->lda);
-    cusolverMpCreateMatrixDesc(&descB, this->grid, this->datatype, nFull, nFull, nblk, nblk, 0, 0, this->lda);
-    cusolverMpCreateMatrixDesc(&descZ, this->grid, this->datatype, nFull, nFull, nblk, nblk, 0, 0, this->lda);
-    outputParameters();
-    MPI_Barrier(MPI_COMM_WORLD);
+    // 20240529 zhanghaochong
+    // Actually, there should be three matrix descriptors, A matrix, B matrix, and output eigenvector matrix.
+    // But in ABACUS the three matrices descriptors are the same.
+    // So, I only create one matrix descriptor and use it for the three matrices.
+    CUSOLVER_CHECK(cusolverMpCreateMatrixDesc(&this->desc_for_cusolvermp,
+                               this->grid,
+                               this->datatype,
+                               nFull,
+                               nFull,
+                               mb,
+                               nb,
+                               rsrc,
+                               csrc,
+                               this->lda));
 }
 
-template<typename inputT>
+template <typename inputT>
 Diag_CusolverMP_gvd<inputT>::~Diag_CusolverMP_gvd()
 {
-    
-    checkCudaErrors(cudaFree(this->d_A));
-    checkCudaErrors(cudaFree(this->d_B));
-    checkCudaErrors(cudaFree(this->d_D));
-    checkCudaErrors(cudaFree(this->d_Z));
-
-    
-    cusolverMpDestroyMatrixDesc(this->descA);
-    cusolverMpDestroyMatrixDesc(this->descB);
-    cusolverMpDestroyMatrixDesc(this->descZ);
-
-    cusolverMpDestroyGrid(this->grid);
-
-    cusolverMpDestroy(this->cusolverMpHandle);
-    int calStat = cal_comm_barrier(this->cal_comm, this->localStream);
-    assert(calStat == CAL_OK);
-    calStat = cal_comm_destroy(this->cal_comm);
-    assert(calStat == CAL_OK);
+    CAL_CHECK(cal_comm_barrier(this->cusolverCalComm, this->localStream));
+    CUSOLVER_CHECK(cusolverMpDestroyMatrixDesc(this->desc_for_cusolvermp));
+    CUSOLVER_CHECK(cusolverMpDestroyGrid(this->grid));
+    CUSOLVER_CHECK(cusolverMpDestroy(this->cusolverMpHandle));
+    CAL_CHECK(cal_comm_destroy(this->cusolverCalComm));
     checkCudaErrors(cudaStreamDestroy(this->localStream));
     // TODO temp solution
     checkCudaErrors(cudaSetDevice(0));
 }
 
-
-template<typename inputT>
-int Diag_CusolverMP_gvd<inputT>::generalized_eigenvector(inputT* A,
-                          inputT* B,
-                          outputT* EigenValue,
-                          inputT* EigenVector)
+template <typename inputT>
+int Diag_CusolverMP_gvd<inputT>::generalized_eigenvector(inputT* A, inputT* B, outputT* EigenValue, inputT* EigenVector)
 {
+    checkCudaErrors(cudaMalloc((void**)&this->d_A, this->n_local * this->m_local * sizeof(inputT)));
+    checkCudaErrors(cudaMalloc((void**)&this->d_B, this->n_local * this->m_local * sizeof(inputT)));
+    checkCudaErrors(cudaMalloc((void**)&this->d_D, this->nFull * sizeof(outputT)));
+    checkCudaErrors(cudaMalloc((void**)&this->d_Z, this->n_local * this->m_local * sizeof(inputT)));
 
-    GlobalV::ofs_running << "run cusolvermp!!" << std::endl;
+    checkCudaErrors(
+        cudaMemcpy(this->d_A, (void*)A, this->n_local * this->m_local * sizeof(inputT), cudaMemcpyHostToDevice));
+    checkCudaErrors(
+        cudaMemcpy(this->d_B, (void*)B, this->n_local * this->m_local * sizeof(inputT), cudaMemcpyHostToDevice));
+    CAL_CHECK(cal_stream_sync(cusolverCalComm, localStream));
 
-    checkCudaErrors(cudaMemcpy(this->d_A, (void*)A, this->narows * this->nacols * sizeof(inputT), cudaMemcpyHostToDevice));
-    checkCudaErrors(cudaMemcpy(this->d_B, (void*)B, this->narows * this->nacols * sizeof(inputT), cudaMemcpyHostToDevice));
-    int calStat = cal_stream_sync(cal_comm, localStream);
-    assert(calStat == CAL_OK);
-    GlobalV::ofs_running << "run cusolvermp 2!!" << std::endl;
-
-    /* size of workspace on device */
     size_t sygvdWorkspaceInBytesOnDevice = 0;
-
-    /* size of workspace on host */
     size_t sygvdWorkspaceInBytesOnHost = 0;
 
-    cusolverMpSygvd_bufferSize(cusolverMpHandle,
-                                CUSOLVER_EIG_TYPE_1,
-                                CUSOLVER_EIG_MODE_VECTOR,
-                                CUBLAS_FILL_MODE_LOWER,
-                                this->nFull,
-                                this->matrix_i,
-                                this->matrix_j,
-                                descA,
-                                this->matrix_i,
-                                this->matrix_j,
-                                descB,
-                                this->matrix_i,
-                                this->matrix_j,
-                                descZ,
-                                this->datatype,
-                                &sygvdWorkspaceInBytesOnDevice,
-                                &sygvdWorkspaceInBytesOnHost);
-    GlobalV::ofs_running << "run cusolvermp 3!!" << std::endl;
+    CUSOLVER_CHECK(cusolverMpSygvd_bufferSize(cusolverMpHandle,
+                               CUSOLVER_EIG_TYPE_1,
+                               CUSOLVER_EIG_MODE_VECTOR,
+                               CUBLAS_FILL_MODE_LOWER,
+                               this->nFull,
+                               this->matrix_i,
+                               this->matrix_j,
+                               desc_for_cusolvermp,
+                               this->matrix_i,
+                               this->matrix_j,
+                               desc_for_cusolvermp,
+                               this->matrix_i,
+                               this->matrix_j,
+                               desc_for_cusolvermp,
+                               this->datatype,
+                               &sygvdWorkspaceInBytesOnDevice,
+                               &sygvdWorkspaceInBytesOnHost));
 
     /* Distributed host workspace */
-    void *h_sygvdWork = NULL;
-    h_sygvdWork = (void *)malloc(sygvdWorkspaceInBytesOnHost);
+    void* h_sygvdWork = NULL;
+    h_sygvdWork = (void*)malloc(sygvdWorkspaceInBytesOnHost);
 
     /* Distributed device workspace */
-    void *d_sygvdWork = NULL;
-    cudaMalloc((void **)&d_sygvdWork, sygvdWorkspaceInBytesOnDevice);
+    void* d_sygvdWork = NULL;
+    checkCudaErrors(cudaMalloc((void**)&d_sygvdWork, sygvdWorkspaceInBytesOnDevice));
+    checkCudaErrors(cudaMemset(d_sygvdWork, 0, sygvdWorkspaceInBytesOnDevice));
 
-    int *d_sygvdInfo = NULL;
-    checkCudaErrors(cudaMalloc((void **)&d_sygvdInfo, sizeof(int)));
+    int* d_sygvdInfo = NULL;
+    checkCudaErrors(cudaMalloc((void**)&d_sygvdInfo, sizeof(int)));
     checkCudaErrors(cudaMemset(d_sygvdInfo, 0, sizeof(int)));
 
     /* sync wait for data to arrive to device */
-    calStat = cal_stream_sync(cal_comm, localStream);
-    assert(calStat == CAL_OK);
+    CAL_CHECK(cal_stream_sync(cusolverCalComm, localStream));
 
-    #define MP_TIME_MEASURE 0
-
-    #if MP_TIME_MEASURE
-    cudaEvent_t start, end;
-    cudaEventCreate(&start);
-    cudaEventCreate(&end);
-
-    cudaEventRecord(start);
-    #endif
-
-    GlobalV::ofs_running << "run cusolvermp 4!!" << std::endl;
-
-    cusolverMpSygvd(cusolverMpHandle,
+    CUSOLVER_CHECK(cusolverMpSygvd(cusolverMpHandle,
                     CUSOLVER_EIG_TYPE_1,
                     CUSOLVER_EIG_MODE_VECTOR,
                     CUBLAS_FILL_MODE_LOWER,
-                    this->nFull,   // TODO 这个参数设法应该不对
+                    this->nFull,
                     d_A,
-                    this->matrix_i,  
+                    this->matrix_i,
                     this->matrix_j,
-                    descA,
+                    desc_for_cusolvermp,
                     d_B,
                     this->matrix_i,
                     this->matrix_j,
-                    descB,
+                    desc_for_cusolvermp,
                     d_D,
                     d_Z,
                     this->matrix_i,
                     this->matrix_j,
-                    descZ,
+                    desc_for_cusolvermp,
                     this->datatype,
                     d_sygvdWork,
                     sygvdWorkspaceInBytesOnDevice,
                     h_sygvdWork,
                     sygvdWorkspaceInBytesOnHost,
-                    d_sygvdInfo);
-    GlobalV::ofs_running << "run cusolvermp 5!!" << std::endl;
+                    d_sygvdInfo));
 
     int h_sygvdInfo = 0;
     checkCudaErrors(cudaMemcpyAsync(&h_sygvdInfo, d_sygvdInfo, sizeof(int), cudaMemcpyDeviceToHost, localStream));
     /* wait for d_sygvdInfo copy */
     checkCudaErrors(cudaStreamSynchronize(localStream));
-
-    #if MP_TIME_MEASURE
-    cudaEventRecord(end);
-    cudaEventSynchronize(end);
-
-    float milliseconds = 0;
-    cudaEventElapsedTime(&milliseconds, start, end);
-    float seconds = milliseconds / 1000;
-    GlobalV::ofs_running << "Execution time: " << seconds << " seconds" << std::endl;
-    cudaEventDestroy(start);
-    cudaEventDestroy(end);
-    #endif
-    calStat = cal_stream_sync(cal_comm, localStream);
-    assert(calStat == CAL_OK);
+    if (h_sygvdInfo != 0)
+    {
+        ModuleBase::WARNING_QUIT("cusolvermp", "cusolverMpSygvd failed with error");
+    }
+    CAL_CHECK(cal_stream_sync(cusolverCalComm, localStream));
 
     checkCudaErrors(cudaFree(d_sygvdWork));
     checkCudaErrors(cudaFree(d_sygvdInfo));
@@ -279,27 +248,39 @@ int Diag_CusolverMP_gvd<inputT>::generalized_eigenvector(inputT* A,
     free(h_sygvdWork);
 
     checkCudaErrors(cudaMemcpy((void*)EigenValue, this->d_D, this->nFull * sizeof(outputT), cudaMemcpyDeviceToHost));
-    checkCudaErrors(cudaMemcpy((void*)EigenVector, this->d_Z, this->narows * this->nacols * sizeof(inputT), cudaMemcpyDeviceToHost));
+    checkCudaErrors(cudaMemcpy((void*)EigenVector,
+                               this->d_Z,
+                               this->n_local * this->m_local * sizeof(inputT),
+                               cudaMemcpyDeviceToHost));
+    // 20240529 zhanghaochong
+    // I move the free operations from destructor to here.
+    // Because I think it is more reasonable to free the memory in the function where it is allocated.
+    // Destructor is used to release resources that allocated in the constructor.
+    // And currently, we construct and destruct the object in every SCF iteration. Maybe one day we 
+    // will construct the object only once during the whole program life cycle.
+    // In that case, allocate and free memory in compute function is more reasonable.
+    checkCudaErrors(cudaFree(this->d_A));
+    checkCudaErrors(cudaFree(this->d_B));
+    checkCudaErrors(cudaFree(this->d_D));
+    checkCudaErrors(cudaFree(this->d_Z));
 
     return 0;
 }
-template<typename inputT>
+template <typename inputT>
 void Diag_CusolverMP_gvd<inputT>::outputParameters()
 {
     GlobalV::ofs_running << "nFull: " << this->nFull << std::endl
-              << "nev: " << this->nev << std::endl
-              << "narows: " << this->narows << std::endl
-              << "nacols: " << this->nacols << std::endl
-              << "nblk: " << this->nblk << std::endl
-              << "lda: " << this->lda << std::endl
-              << "nprows: " << this->nprows << std::endl
-              << "npcols: " << this->npcols << std::endl
-              << "myprow: " << this->myprow << std::endl
-              << "mypcol: " << this->mypcol << std::endl
-              << "my_global_mpi_id: " << this->my_global_mpi_id << std::endl
-              << "mpi_size: " << this->mpi_size << std::endl
-              << "matrix_i: " << this->matrix_i << std::endl
-              << "matrix_j: " << this->matrix_j << std::endl;
+                         << "m_local: " << this->m_local << std::endl
+                         << "n_local: " << this->n_local << std::endl
+                         << "lda: " << this->lda << std::endl
+                         << "nprows: " << this->nprows << std::endl
+                         << "npcols: " << this->npcols << std::endl
+                         << "myprow: " << this->myprow << std::endl
+                         << "mypcol: " << this->mypcol << std::endl
+                         << "globalMpiRank: " << this->globalMpiRank << std::endl
+                         << "globalMpiSize: " << this->globalMpiSize << std::endl
+                         << "matrix_i: " << this->matrix_i << std::endl
+                         << "matrix_j: " << this->matrix_j << std::endl;
 }
 
 template class Diag_CusolverMP_gvd<double>;

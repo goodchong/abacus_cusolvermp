@@ -16,7 +16,6 @@ class Diag_CusolverMP_gvd
 
   public:
     Diag_CusolverMP_gvd(const MPI_Comm comm,
-                          const int nev,
                           const int narows,
                           const int nacols,
                           const int* desc);
@@ -28,34 +27,35 @@ class Diag_CusolverMP_gvd
     ~Diag_CusolverMP_gvd();
     void outputParameters();
   private:
-    MPI_Comm comm;
+
     int nFull;
-    int nev;
-    int narows;
-    int nacols;
     int cblacs_ctxt;
-    int nblk;
     int lda;
+
+    // num of processor rows and cols
     int nprows;
     int npcols;
+    // my processor row and col
     int myprow;
     int mypcol;
+
+    int m_local;
+    int n_local;
     int comm_f;
-    int my_global_mpi_id;
-    int mpi_size;
+    // my global mpi id
+    int globalMpiRank;
+    // global mpi size
+    int globalMpiSize;
     cudaDataType_t datatype;
 
-    cal_comm_t cal_comm = NULL;
+    cal_comm_t cusolverCalComm = NULL;
     cudaStream_t localStream = NULL;
     cusolverMpHandle_t cusolverMpHandle = NULL;
     cusolverMpGrid_t grid = NULL;
 
     /* cusolverMp matrix descriptors */
-    cusolverMpMatrixDescriptor_t descA = NULL;
-    cusolverMpMatrixDescriptor_t descB = NULL;
-    cusolverMpMatrixDescriptor_t descZ = NULL;
+    cusolverMpMatrixDescriptor_t desc_for_cusolvermp = NULL;
 
-    // TODO 这个参数设法应该不对
     int64_t matrix_i;
     int64_t matrix_j;
 
