@@ -181,7 +181,7 @@ void ElecStateLCAO<double>::psiToRho(const psi::Psi<double>& psi)
     this->calEBand();
 
     if (GlobalV::KS_SOLVER == "genelpa" || GlobalV::KS_SOLVER == "scalapack_gvx" || GlobalV::KS_SOLVER == "lapack"
-        || GlobalV::KS_SOLVER == "cusolver" || GlobalV::KS_SOLVER == "cg_in_lcao")
+        || GlobalV::KS_SOLVER == "cusolver"|| GlobalV::KS_SOLVER == "cusolvermp" || GlobalV::KS_SOLVER == "cg_in_lcao")
     {
         ModuleBase::timer::tick("ElecStateLCAO", "cal_dm_2d");
 
@@ -202,7 +202,7 @@ void ElecStateLCAO<double>::psiToRho(const psi::Psi<double>& psi)
         {
             // for gamma_only case, no convertion occured, just for print.
             if (GlobalV::KS_SOLVER == "genelpa" || GlobalV::KS_SOLVER == "scalapack_gvx"
-                || GlobalV::KS_SOLVER == "cusolver" || GlobalV::KS_SOLVER == "cg_in_lcao")
+                || GlobalV::KS_SOLVER == "cusolver" || GlobalV::KS_SOLVER == "cusolvermp"|| GlobalV::KS_SOLVER == "cg_in_lcao")
             {
                 psi.fix_k(ik);
                 this->print_psi(psi);
