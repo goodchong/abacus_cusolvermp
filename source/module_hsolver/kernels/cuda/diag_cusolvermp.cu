@@ -141,8 +141,6 @@ Diag_CusolverMP_gvd<inputT>::~Diag_CusolverMP_gvd()
     CUSOLVER_CHECK(cusolverMpDestroy(this->cusolverMpHandle));
     CAL_CHECK(cal_comm_destroy(this->cusolverCalComm));
     checkCudaErrors(cudaStreamDestroy(this->localStream));
-    // TODO temp solution
-    checkCudaErrors(cudaSetDevice(0));
 }
 
 

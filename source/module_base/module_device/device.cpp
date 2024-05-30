@@ -149,7 +149,11 @@ int set_device_by_rank(const MPI_Comm mpi_comm)
     }
     // warning: this is not a good way to assign devices, user should assign One process per GPU
     int local_device_id = localMpiRank % device_num;
-    cudaSetDevice(local_device_id);
+    int ret = cudaSetDevice(local_device_id);
+    if (ret != cudaSuccess)
+    {
+        ModuleBase::WARNING_QUIT("device","cudaSetDevice failed!");
+    }
     return local_device_id;
 }
 

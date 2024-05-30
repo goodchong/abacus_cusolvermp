@@ -640,6 +640,11 @@ void Grid_Technique::cal_trace_lo(const UnitCell& ucell)
 
 void Grid_Technique::init_gpu_gint_variables(const UnitCell& ucell,const LCAO_Orbitals &orb)
 {
+    
+    int dev_id = base_device::information::set_device_by_rank();
+    ModuleBase::GlobalFunc::OUT(GlobalV::ofs_running,
+                                "GPU device id gridt",
+                                dev_id);
     if (is_malloced)
     {
         free_gpu_gint_variables(this->nat);

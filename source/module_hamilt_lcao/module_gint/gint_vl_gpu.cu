@@ -50,6 +50,11 @@ void gint_gamma_vl_gpu(hamilt::HContainer<double>* hRGint,
                        const UnitCell& ucell)
 {
     const int nbz = gridt.nbzp;
+    int dev_id = base_device::information::set_device_by_rank();
+    ModuleBase::GlobalFunc::OUT(GlobalV::ofs_running,
+                                "GPU device id vlocal",
+                                dev_id);
+
     checkCuda(cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync));
     {
         int iter_num = 0;
@@ -106,6 +111,7 @@ void gint_gamma_vl_gpu(hamilt::HContainer<double>* hRGint,
     {
         for (int j = 0; j < gridt.nby; j++)
         {
+            cudaSetDevice(dev_id);
             int stream_num = omp_get_thread_num();
             checkCuda(cudaStreamSynchronize(gridt.streams[stream_num]));
             double* input_double
@@ -278,22 +284,22 @@ void gint_gamma_vl_gpu(hamilt::HContainer<double>* hRGint,
                                 block_psi,
                                 0,
                                 gridt.streams[stream_num]>>>(
-                gridt.ylmcoef_g,
-                dr,
-                gridt.bxyz,
-                ucell.nwmax,
-                input_double_g,
-                input_int_g,
-                num_psir_g,
-                gridt.psi_size_max_z,
-                gridt.atom_nwl_g,
-                gridt.atom_new_g,
-                gridt.atom_ylm_g,
-                gridt.atom_nw_g,
-                gridt.nr_max,
-                gridt.psi_u_g,
-                psir_ylm_left_g,
-                psir_r_g);
+                                    gridt.ylmcoef_g,
+                                    dr,
+                                    gridt.bxyz,
+                                    ucell.nwmax,
+                                    input_double_g,
+                                    input_int_g,
+                                    num_psir_g,
+                                    gridt.psi_size_max_z,
+                                    gridt.atom_nwl_g,
+                                    gridt.atom_new_g,
+                                    gridt.atom_ylm_g,
+                                    gridt.atom_nw_g,
+                                    gridt.nr_max,
+                                    gridt.psi_u_g,
+                                    psir_ylm_left_g,
+                                    psir_r_g);
             checkCudaLastError();
             gridt.fastest_matrix_mul(max_m,
                                      max_n,
