@@ -63,12 +63,6 @@ class Diag_CusolverMP_gvd
 
     int64_t matrix_i;
     int64_t matrix_j;
-
-    void *d_A = NULL;
-    void *d_B = NULL;
-    void *d_D = NULL;
-    void *d_Z = NULL;
-
 };
 
 // 实现模板类的成员函数

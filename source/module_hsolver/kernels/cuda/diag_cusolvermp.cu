@@ -149,15 +149,20 @@ Diag_CusolverMP_gvd<inputT>::~Diag_CusolverMP_gvd()
 template <typename inputT>
 int Diag_CusolverMP_gvd<inputT>::generalized_eigenvector(inputT* A, inputT* B, outputT* EigenValue, inputT* EigenVector)
 {
-    checkCudaErrors(cudaMalloc((void**)&this->d_A, this->n_local * this->m_local * sizeof(inputT)));
-    checkCudaErrors(cudaMalloc((void**)&this->d_B, this->n_local * this->m_local * sizeof(inputT)));
-    checkCudaErrors(cudaMalloc((void**)&this->d_D, this->nFull * sizeof(outputT)));
-    checkCudaErrors(cudaMalloc((void**)&this->d_Z, this->n_local * this->m_local * sizeof(inputT)));
+    void *d_A = NULL;
+    void *d_B = NULL;
+    void *d_D = NULL;
+    void *d_Z = NULL;
+
+    checkCudaErrors(cudaMalloc((void**)&d_A, this->n_local * this->m_local * sizeof(inputT)));
+    checkCudaErrors(cudaMalloc((void**)&d_B, this->n_local * this->m_local * sizeof(inputT)));
+    checkCudaErrors(cudaMalloc((void**)&d_D, this->nFull * sizeof(outputT)));
+    checkCudaErrors(cudaMalloc((void**)&d_Z, this->n_local * this->m_local * sizeof(inputT)));
 
     checkCudaErrors(
-        cudaMemcpy(this->d_A, (void*)A, this->n_local * this->m_local * sizeof(inputT), cudaMemcpyHostToDevice));
+        cudaMemcpy(d_A, (void*)A, this->n_local * this->m_local * sizeof(inputT), cudaMemcpyHostToDevice));
     checkCudaErrors(
-        cudaMemcpy(this->d_B, (void*)B, this->n_local * this->m_local * sizeof(inputT), cudaMemcpyHostToDevice));
+        cudaMemcpy(d_B, (void*)B, this->n_local * this->m_local * sizeof(inputT), cudaMemcpyHostToDevice));
     CAL_CHECK(cal_stream_sync(this->cusolverCalComm, this->localStream));
 
     size_t sygvdWorkspaceInBytesOnDevice = 0;
@@ -205,16 +210,16 @@ int Diag_CusolverMP_gvd<inputT>::generalized_eigenvector(inputT* A, inputT* B, o
                     d_A,
                     this->matrix_i,
                     this->matrix_j,
-                    desc_for_cusolvermp,
+                    this->desc_for_cusolvermp,
                     d_B,
                     this->matrix_i,
                     this->matrix_j,
-                    desc_for_cusolvermp,
+                    this->desc_for_cusolvermp,
                     d_D,
                     d_Z,
                     this->matrix_i,
                     this->matrix_j,
-                    desc_for_cusolvermp,
+                    this->desc_for_cusolvermp,
                     this->datatype,
                     d_sygvdWork,
                     sygvdWorkspaceInBytesOnDevice,
@@ -223,23 +228,23 @@ int Diag_CusolverMP_gvd<inputT>::generalized_eigenvector(inputT* A, inputT* B, o
                     d_sygvdInfo));
 
     int h_sygvdInfo = 0;
-    checkCudaErrors(cudaMemcpyAsync(&h_sygvdInfo, d_sygvdInfo, sizeof(int), cudaMemcpyDeviceToHost, localStream));
+    checkCudaErrors(cudaMemcpyAsync(&h_sygvdInfo, d_sygvdInfo, sizeof(int), cudaMemcpyDeviceToHost, this->localStream));
     /* wait for d_sygvdInfo copy */
-    checkCudaErrors(cudaStreamSynchronize(localStream));
+    checkCudaErrors(cudaStreamSynchronize(this->localStream));
     if (h_sygvdInfo != 0)
     {
         ModuleBase::WARNING_QUIT("cusolvermp", "cusolverMpSygvd failed with error");
     }
-    CAL_CHECK(cal_stream_sync(cusolverCalComm, localStream));
+    CAL_CHECK(cal_stream_sync(this->cusolverCalComm, this->localStream));
 
     checkCudaErrors(cudaFree(d_sygvdWork));
     checkCudaErrors(cudaFree(d_sygvdInfo));
 
     free(h_sygvdWork);
 
-    checkCudaErrors(cudaMemcpy((void*)EigenValue, this->d_D, this->nFull * sizeof(outputT), cudaMemcpyDeviceToHost));
+    checkCudaErrors(cudaMemcpy((void*)EigenValue, d_D, this->nFull * sizeof(outputT), cudaMemcpyDeviceToHost));
     checkCudaErrors(cudaMemcpy((void*)EigenVector,
-                               this->d_Z,
+                               d_Z,
                                this->n_local * this->m_local * sizeof(inputT),
                                cudaMemcpyDeviceToHost));
     // 20240529 zhanghaochong
@@ -249,10 +254,10 @@ int Diag_CusolverMP_gvd<inputT>::generalized_eigenvector(inputT* A, inputT* B, o
     // And currently, we construct and destruct the object in every SCF iteration. Maybe one day we 
     // will construct the object only once during the whole program life cycle.
     // In that case, allocate and free memory in compute function is more reasonable.
-    checkCudaErrors(cudaFree(this->d_A));
-    checkCudaErrors(cudaFree(this->d_B));
-    checkCudaErrors(cudaFree(this->d_D));
-    checkCudaErrors(cudaFree(this->d_Z));
+    checkCudaErrors(cudaFree(d_A));
+    checkCudaErrors(cudaFree(d_B));
+    checkCudaErrors(cudaFree(d_D));
+    checkCudaErrors(cudaFree(d_Z));
 
     return 0;
 }
