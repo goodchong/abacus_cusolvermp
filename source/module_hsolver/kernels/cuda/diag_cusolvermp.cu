@@ -11,7 +11,7 @@ extern "C"
 #include <iostream>
 #include "helper_cusolver.h"
 #include "module_base/global_function.h"
-
+#include "module_base/module_device/device.h"
 static calError_t allgather(void* src_buf, void* recv_buf, size_t size, void* data, void** request)
 {
     MPI_Request req;
@@ -66,18 +66,7 @@ Diag_CusolverMP_gvd<inputT>::Diag_CusolverMP_gvd(const MPI_Comm mpi_comm,
 
     MPI_Comm_size(mpi_comm, &this->globalMpiSize);
     MPI_Comm_rank(mpi_comm, &(this->globalMpiRank));
-    int localMpiRank;
-    {
-        MPI_Comm localComm;
-
-        MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, &localComm);
-        MPI_Comm_rank(localComm, &localMpiRank);
-        MPI_Comm_free(&localComm);
-    }
-    // warning: this is not a good way to assign devices, user should assign One process per GPU
-    // TODO temp solution
-    checkCudaErrors(cudaSetDevice(localMpiRank));
-
+    int local_device_id = base_device::information::set_device_by_rank(mpi_comm);
     Cblacs_gridinfo(this->cblacs_ctxt, &this->nprows, &this->npcols, &this->myprow, &this->mypcol);
 
     this->cusolverCalComm = NULL;
@@ -85,15 +74,15 @@ Diag_CusolverMP_gvd<inputT>::Diag_CusolverMP_gvd(const MPI_Comm mpi_comm,
     params.allgather = allgather;
     params.req_test = request_test;
     params.req_free = request_free;
-    params.data = (void*)(MPI_COMM_WORLD);
+    params.data = (void*)(mpi_comm);
     params.rank = this->globalMpiRank;
     params.nranks = this->globalMpiSize;
-    params.local_device = localMpiRank;
+    params.local_device = local_device_id;
 
     CAL_CHECK(cal_comm_create(params, &this->cusolverCalComm));
 
     checkCudaErrors(cudaStreamCreate(&this->localStream));
-    CUSOLVER_CHECK(cusolverMpCreate(&cusolverMpHandle, localMpiRank, this->localStream));
+    CUSOLVER_CHECK(cusolverMpCreate(&cusolverMpHandle, local_device_id, this->localStream));
 
     // 20240529 zhanghaochong
     // so far, cusolvermp only support = 1
@@ -156,6 +145,7 @@ Diag_CusolverMP_gvd<inputT>::~Diag_CusolverMP_gvd()
     checkCudaErrors(cudaSetDevice(0));
 }
 
+
 template <typename inputT>
 int Diag_CusolverMP_gvd<inputT>::generalized_eigenvector(inputT* A, inputT* B, outputT* EigenValue, inputT* EigenVector)
 {
@@ -168,7 +158,7 @@ int Diag_CusolverMP_gvd<inputT>::generalized_eigenvector(inputT* A, inputT* B, o
         cudaMemcpy(this->d_A, (void*)A, this->n_local * this->m_local * sizeof(inputT), cudaMemcpyHostToDevice));
     checkCudaErrors(
         cudaMemcpy(this->d_B, (void*)B, this->n_local * this->m_local * sizeof(inputT), cudaMemcpyHostToDevice));
-    CAL_CHECK(cal_stream_sync(cusolverCalComm, localStream));
+    CAL_CHECK(cal_stream_sync(this->cusolverCalComm, this->localStream));
 
     size_t sygvdWorkspaceInBytesOnDevice = 0;
     size_t sygvdWorkspaceInBytesOnHost = 0;
@@ -180,13 +170,13 @@ int Diag_CusolverMP_gvd<inputT>::generalized_eigenvector(inputT* A, inputT* B, o
                                this->nFull,
                                this->matrix_i,
                                this->matrix_j,
-                               desc_for_cusolvermp,
+                               this->desc_for_cusolvermp,
                                this->matrix_i,
                                this->matrix_j,
-                               desc_for_cusolvermp,
+                               this->desc_for_cusolvermp,
                                this->matrix_i,
                                this->matrix_j,
-                               desc_for_cusolvermp,
+                               this->desc_for_cusolvermp,
                                this->datatype,
                                &sygvdWorkspaceInBytesOnDevice,
                                &sygvdWorkspaceInBytesOnHost));

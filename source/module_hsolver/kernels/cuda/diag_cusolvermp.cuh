@@ -20,6 +20,11 @@ class Diag_CusolverMP_gvd
                           const int nacols,
                           const int* desc);
 
+
+    // 20240530 zhanghaochong
+    // Here eigen is the output rather than the input. Don't be confused by inputT.
+    // Here inputT is the data type, the data type of EigenVector should be the same as
+    // the data type of the input matrix.
     int generalized_eigenvector(inputT* A,
                                 inputT* B,
                                 outputT* EigenValue,
